@@ -10,6 +10,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  SlashCommandBuilder,
 } = require("discord.js");
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -54,6 +55,19 @@ const client = new Client({
 
 client.once("clientReady", async () => {
   console.log(`Logged in as ${client.user.tag} (ID: ${client.user.id})`);
+
+  try {
+    await client.application.commands.set([
+      new SlashCommandBuilder()
+        .setName("edit")
+        .setDescription("Edit one of your Botmosphere messages"),
+      new SlashCommandBuilder()
+        .setName("delete")
+        .setDescription("Delete one of your Botmosphere messages"),
+    ]);
+  } catch (error) {
+    console.error("Failed to register slash commands:", error);
+  }
   /*
   for (const channel of client.channels.cache.values()) {
     if (channel.type === ChannelType.GuildText && channel.name === "general") {
@@ -89,18 +103,6 @@ client.on("messageCreate", async (message) => {
     await undoLast(message.author.id);
     return;
   }
-
-  if (command === "edit") {
-    await deleteMessage(message);
-    await promptEdit(message);
-    return;
-  }
-
-  if (command === "delete") {
-    await deleteMessage(message);
-    await promptDelete(message);
-    return;
-  }
 });
 
 async function deleteMessage(message) {
@@ -130,15 +132,10 @@ async function undoLast(userId) {
   }
 }
 
-// Show a select menu of the user's past emotes so they can pick one to edit.
-async function promptEdit(message) {
-  const stack = userMessages.get(message.author.id);
-
-  if (!stack || stack.length === 0) {
-    const notice = await message.channel.send("You have no messages to edit.");
-    setTimeout(() => notice.delete().catch(() => {}), 5000);
-    return;
-  }
+// Build an ephemeral select-menu row of the user's past emotes, or null if none.
+function buildPanel(userId, type) {
+  const stack = userMessages.get(userId);
+  if (!stack || stack.length === 0) return null;
 
   const options = stack
     .slice(-25)
@@ -150,14 +147,11 @@ async function promptEdit(message) {
     );
 
   const menu = new StringSelectMenuBuilder()
-    .setCustomId(`editselect:${message.author.id}`)
-    .setPlaceholder("Select a message to edit")
+    .setCustomId(`${type}select:${userId}`)
+    .setPlaceholder(`Select a message to ${type}`)
     .addOptions(options);
 
-  await message.channel.send({
-    content: "Which message do you want to edit?",
-    components: [new ActionRowBuilder().addComponents(menu)],
-  });
+  return new ActionRowBuilder().addComponents(menu);
 }
 
 // First few words of an emote, for use as a select-menu label (max 100 chars).
@@ -167,37 +161,36 @@ function preview(content) {
   return words.length > 100 ? `${words.slice(0, 99)}\u2026` : words;
 }
 
-// Show a select menu of the user's past emotes so they can pick one to delete.
-async function promptDelete(message) {
-  const stack = userMessages.get(message.author.id);
+client.on("interactionCreate", async (interaction) => {
+  if (interaction.isChatInputCommand()) {
+    const type = interaction.commandName;
+    if (type !== "edit" && type !== "delete") return;
 
-  if (!stack || stack.length === 0) {
-    const notice = await message.channel.send("You have no messages to delete.");
-    setTimeout(() => notice.delete().catch(() => {}), 5000);
+    if (!interaction.member?.roles.cache.hasAny(...ALLOWED_ROLE_IDS)) {
+      await interaction.reply({
+        content: "You don't have permission to use this bot.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const row = buildPanel(interaction.user.id, type);
+    if (!row) {
+      await interaction.reply({
+        content: `You have no messages to ${type}.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.reply({
+      content: `Which message do you want to ${type}?`,
+      components: [row],
+      ephemeral: true,
+    });
     return;
   }
 
-  const options = stack
-    .slice(-25)
-    .reverse()
-    .map((entry) =>
-      new StringSelectMenuOptionBuilder()
-        .setLabel(preview(entry.content))
-        .setValue(`${entry.channelId}:${entry.messageId}`)
-    );
-
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`deleteselect:${message.author.id}`)
-    .setPlaceholder("Select a message to delete")
-    .addOptions(options);
-
-  await message.channel.send({
-    content: "Which message do you want to delete?",
-    components: [new ActionRowBuilder().addComponents(menu)],
-  });
-}
-
-client.on("interactionCreate", async (interaction) => {
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("deleteselect:")) {
     const ownerId = interaction.customId.split(":")[1];
 
@@ -220,9 +213,8 @@ client.on("interactionCreate", async (interaction) => {
 
     removeStoredMessage(ownerId, targetId);
 
-    // Remove the selection menu message and acknowledge without a confirmation.
-    interaction.message.delete().catch(() => {});
-    await interaction.deferUpdate();
+    // Replace the ephemeral panel with a confirmation only the user can see.
+    await interaction.update({ content: "Message deleted.", components: [] });
     return;
   }
 
@@ -260,7 +252,7 @@ client.on("interactionCreate", async (interaction) => {
       .setValue(current);
 
     const modal = new ModalBuilder()
-      .setCustomId(`editmodal:${channelId}:${targetId}:${interaction.message.id}`)
+      .setCustomId(`editmodal:${channelId}:${targetId}`)
       .setTitle("Edit message")
       .addComponents(new ActionRowBuilder().addComponents(input));
 
@@ -269,7 +261,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (interaction.isModalSubmit() && interaction.customId.startsWith("editmodal:")) {
-    const [, channelId, targetId, promptId] = interaction.customId.split(":");
+    const [, channelId, targetId] = interaction.customId.split(":");
     const newContent = interaction.fields.getTextInputValue("content");
 
     try {
@@ -283,13 +275,8 @@ client.on("interactionCreate", async (interaction) => {
       // Edit target may be gone; nothing to do.
     }
 
-    // Remove the selection menu message and acknowledge without a confirmation.
-    interaction.channel.messages
-      .fetch(promptId)
-      .then((msg) => msg.delete())
-      .catch(() => {});
-
-    await interaction.deferUpdate();
+    // Replace the ephemeral panel with a confirmation only the user can see.
+    await interaction.update({ content: "Message edited.", components: [] });
   }
 });
 
