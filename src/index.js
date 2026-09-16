@@ -15,6 +15,9 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = "gm!";
 
+// Role IDs permitted to use Botmosphere commands.
+const ALLOWED_ROLE_IDS = ["1435091261517332512", "1548347060611457215"];
+
 // userId -> stack of { channelId, messageId } for bot messages posted on their behalf.
 const userMessages = new Map();
 
@@ -65,6 +68,8 @@ client.once("clientReady", async () => {
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+
+  if (!message.member?.roles.cache.hasAny(...ALLOWED_ROLE_IDS)) return;
 
   const args = message.content.slice(PREFIX.length).trim();
   const spaceIndex = args.indexOf(" ");
