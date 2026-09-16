@@ -59,10 +59,10 @@ client.once("clientReady", async () => {
   try {
     await client.application.commands.set([
       new SlashCommandBuilder()
-        .setName("edit")
+        .setName("gm-edit")
         .setDescription("Edit one of your Botmosphere messages"),
       new SlashCommandBuilder()
-        .setName("delete")
+        .setName("gm-delete")
         .setDescription("Delete one of your Botmosphere messages"),
     ]);
   } catch (error) {
@@ -163,8 +163,13 @@ function preview(content) {
 
 client.on("interactionCreate", async (interaction) => {
   if (interaction.isChatInputCommand()) {
-    const type = interaction.commandName;
-    if (type !== "edit" && type !== "delete") return;
+    const type =
+      interaction.commandName === "gm-edit"
+        ? "edit"
+        : interaction.commandName === "gm-delete"
+        ? "delete"
+        : null;
+    if (!type) return;
 
     if (!interaction.member?.roles.cache.hasAny(...ALLOWED_ROLE_IDS)) {
       await interaction.reply({
